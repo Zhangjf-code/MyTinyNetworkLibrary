@@ -61,9 +61,13 @@
     .range-line { display: flex; align-items: center; gap: 12px; }
     input[type="range"] { flex: 1; accent-color: var(--primary); }
     output { min-width: 42px; text-align: right; color: var(--primary); font-variant-numeric: tabular-nums; }
-    .file-picker { display: block; padding: 18px; border: 1px dashed #47617f; border-radius: 11px; text-align: center; cursor: pointer; background: rgba(28, 44, 70, .5); }
+    .file-picker { position: relative; display: block; padding: 18px; border: 1px dashed #47617f; border-radius: 11px; text-align: center; cursor: pointer; background: rgba(28, 44, 70, .5); transition: border-color .15s, background .15s; }
     .file-picker:hover { border-color: var(--primary); }
-    .file-picker input { position: absolute; opacity: 0; pointer-events: none; }
+    .file-picker.dragging { border-color: var(--primary); background: rgba(86, 214, 176, .13); }
+    .file-picker:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    #imageInput { display: block; width: 100%; margin-top: 10px; color: var(--muted); }
+    #imageInput::file-selector-button { margin-right: 10px; border: 1px solid var(--primary); border-radius: 8px; padding: 9px 12px; color: var(--text); background: var(--primary-dark); cursor: pointer; }
+    #imageInput::file-selector-button:hover { filter: brightness(1.2); }
     #fileName { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #submit { width: 100%; border: 0; border-radius: 10px; padding: 12px 16px; color: #071613; background: var(--primary); font-weight: 700; cursor: pointer; }
     #submit:hover { filter: brightness(1.08); }
@@ -133,11 +137,11 @@
           </div>
         </div>
         <div class="field">
-          <label class="file-picker" for="imageInput">
-            选择检测图片
+          <div class="file-picker" id="dropZone" role="button" tabindex="0">
+            将检测图片拖拽到这里
             <span id="fileName">JPEG / PNG，最大 10 MiB</span>
-            <input id="imageInput" type="file" accept="image/jpeg,image/png">
-          </label>
+          </div>
+          <input id="imageInput" type="file" accept="image/jpeg,image/png">
         </div>
         <button id="submit" type="button">开始推理</button>
         <p class="message" id="message" role="status"></p>
@@ -168,7 +172,8 @@
     const elements = {
       model: document.querySelector("#model"), backend: document.querySelector("#backend"),
       threshold: document.querySelector("#threshold"), thresholdValue: document.querySelector("#thresholdValue"),
-      imageInput: document.querySelector("#imageInput"), fileName: document.querySelector("#fileName"),
+      imageInput: document.querySelector("#imageInput"), dropZone: document.querySelector("#dropZone"),
+      fileName: document.querySelector("#fileName"),
       submit: document.querySelector("#submit"), message: document.querySelector("#message"),
       canvas: document.querySelector("#canvas"), empty: document.querySelector("#emptyState"),
       imageSize: document.querySelector("#imageSize"), detections: document.querySelector("#detections"),
@@ -180,6 +185,7 @@
     const context = elements.canvas.getContext("2d");
     let sourceImage = null;
     let previewUrl = null;
+    let selectedFile = null;
 
     function setMessage(text, error = false) {
       elements.message.textContent = text;
@@ -226,9 +232,17 @@
       elements.thresholdValue.value = Number(elements.threshold.value).toFixed(2);
     });
 
-    elements.imageInput.addEventListener("change", () => {
-      const file = elements.imageInput.files[0];
+    function selectImage(file) {
       if (!file) return;
+      if (!(["image/jpeg", "image/png"].includes(file.type))) {
+        setMessage("请选择 JPEG 或 PNG 图片", true);
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setMessage("图片不能超过 10 MiB", true);
+        return;
+      }
+      selectedFile = file;
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(file);
       const image = new Image();
@@ -244,10 +258,30 @@
       };
       image.onerror = () => setMessage("浏览器无法读取该图片", true);
       image.src = previewUrl;
+    }
+
+    elements.imageInput.addEventListener("change", () => {
+      selectImage(elements.imageInput.files[0]);
+    });
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+      elements.dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        elements.dropZone.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach((eventName) => {
+      elements.dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        elements.dropZone.classList.remove("dragging");
+      });
+    });
+    elements.dropZone.addEventListener("drop", (event) => {
+      selectImage(event.dataTransfer.files[0]);
     });
 
     elements.submit.addEventListener("click", async () => {
-      const file = elements.imageInput.files[0];
+      const file = selectedFile;
       if (!file) { setMessage("请先选择一张图片", true); return; }
       const form = new FormData();
       form.append("model", elements.model.value.trim() || "default");
