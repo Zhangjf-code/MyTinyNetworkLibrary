@@ -3,11 +3,22 @@
 #include "noncopyable.h"
 #include "Timestamp.h"
 #include <unordered_map>
+#include <vector>
+#include <algorithm>
+#include <cctype>
 
 
 class HttpRequest
 {
 public:
+    struct UploadedFile
+    {
+        std::string fieldName;
+        std::string fileName;
+        std::string contentType;
+        std::string content;
+    };
+
     enum Method { kInvalid, kGet, kPost, kHead, kPut, kDelete };
     enum Version { kUnknown, kHttp10, kHttp11 };
 
@@ -107,6 +118,8 @@ public:
     void addHeader(const char *start, const char *colon, const char *end)
     {
         std::string field(start, colon);
+        std::transform(field.begin(), field.end(), field.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         ++colon;
         // 跳过空格
         while (colon < end && isspace(*colon))
@@ -132,7 +145,10 @@ public:
     std::string getHeader(const std::string &field) const
     {
         std::string result;
-        auto it = headers_.find(field);
+        std::string normalized(field);
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        auto it = headers_.find(normalized);
         if (it != headers_.end())
         {
             result = it->second;
@@ -163,6 +179,10 @@ public:
         return bodyform_;
     }
 
+    void addFile(UploadedFile file) { files_.emplace_back(std::move(file)); }
+
+    const std::vector<UploadedFile>& files() const { return files_; }
+
 
     void swap(HttpRequest &rhs)
     {
@@ -173,6 +193,8 @@ public:
         std::swap(receiveTime_, rhs.receiveTime_);
         headers_.swap(rhs.headers_);
         bodyform_.swap(rhs.bodyform_);
+        files_.swap(rhs.files_);
+        body_.swap(rhs.body_);
     }
 
     void setBody(const std::string &body)
@@ -193,5 +215,6 @@ private:
     Timestamp receiveTime_; // 请求时间
     std::unordered_map<std::string, std::string> headers_; // 请求头部列表
     std::unordered_map<std::string, std::string> bodyform_; // body 表单
+    std::vector<UploadedFile> files_; // multipart上传文件（保存在内存中）
     std::string body_;
 };

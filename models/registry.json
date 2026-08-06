@@ -1,0 +1,25 @@
+{
+  "default_model": "yolov8n",
+  "models": [
+    {
+      "name": "yolov8n",
+      "version": "trt-10.0.1-fp16",
+      "backend": "tensorrt",
+      "path": "yolov8n_fp16.engine",
+      "device_id": 0,
+      "max_concurrency": 1,
+      "priority": 100,
+      "enabled": true
+    },
+    {
+      "name": "yolov8n",
+      "version": "tf-2.18.0",
+      "backend": "tensorflow",
+      "path": "yolov8n_tf218_saved_model",
+      "device_id": 0,
+      "max_concurrency": 1,
+      "priority": 10,
+      "enabled": true
+    }
+  ]
+}

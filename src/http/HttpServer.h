@@ -12,6 +12,7 @@ class HttpServer
 {
 public:
     using HttpCallback = std::function<void (const HttpRequest&, HttpResponse*)>;
+    using AsyncHttpCallback = std::function<bool (const TcpConnectionPtr&, const HttpRequest&)>;
 
     HttpServer(EventLoop *loop,
             const InetAddress& listenAddr,
@@ -21,6 +22,11 @@ public:
     {
         httpCallback_ = cb;
     }
+
+    void setAsyncHttpCallback(const AsyncHttpCallback& cb)
+    {
+        asyncHttpCallback_ = cb;
+    }
     
     void start();
 
@@ -29,10 +35,10 @@ private:
     void onMessage(const TcpConnectionPtr &conn,
                     Buffer *buf,
                     Timestamp receiveTime);
-    void onRequest(const TcpConnectionPtr&, const HttpRequest&);
+    bool onRequest(const TcpConnectionPtr&, const HttpRequest&);
 
     EventLoop *loop_;
     HttpCallback httpCallback_;
+    AsyncHttpCallback asyncHttpCallback_;
     TcpServer server_;
 };
-

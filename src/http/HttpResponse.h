@@ -15,6 +15,13 @@ public:
         k200Ok = 200,
         k301MovedPermanently = 301,
         k400BadRequest = 400,
+        k405MethodNotAllowed = 405,
+        k413PayloadTooLarge = 413,
+        k415UnsupportedMediaType = 415,
+        k422UnprocessableEntity = 422,
+        k500InternalServerError = 500,
+        k501NotImplemented = 501,
+        k503ServiceUnavailable = 503,
         k404NotFound = 404,
     };  
 
@@ -35,6 +42,16 @@ public:
 
     bool closeConnection() const
     { return closeConnection_; }  
+
+    HttpStatusCode statusCode() const { return statusCode_; }
+
+    const std::string& body() const { return body_; }
+
+    std::string getHeader(const std::string& key) const
+    {
+        const auto it = headers_.find(key);
+        return it == headers_.end() ? std::string() : it->second;
+    }
 
     void setContentType(const std::string& contentType)
     { addHeader("Content-Type", contentType); } 

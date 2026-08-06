@@ -68,16 +68,12 @@ void TcpConnection::send(const std::string &buf)
     {
         if (loop_->isInLoopThread())
         {
-            sendInLoop(buf.c_str(), buf.size());
+            sendInLoop(buf);
         }
         else
         {
-            loop_->runInLoop(std::bind(
-                &TcpConnection::sendInLoop,
-                this,
-                buf.c_str(),
-                buf.size()
-            ));
+            TcpConnectionPtr self(shared_from_this());
+            loop_->runInLoop([self, buf]() { self->sendInLoop(buf); });
         }
     }
 }
@@ -85,8 +81,10 @@ void TcpConnection::send(const std::string &buf)
 /**
  * 发送数据  应用写的快， 而内核发送数据慢， 需要把待发送数据写入缓冲区， 而且设置了水位回调
  */ 
-void TcpConnection::sendInLoop(const void* data, size_t len)
+void TcpConnection::sendInLoop(const std::string& message)
 {
+    const void* data = message.data();
+    const size_t len = message.size();
     ssize_t nwrote = 0;
     size_t remaining = len;
     bool faultError = false;
@@ -169,6 +167,21 @@ void TcpConnection::shutdownInLoop()
     {
         std::cout<<"shutdownInLoop"<<loop_->getthreadId()<<std::endl;
         socket_->shutdownWrite(); // 关闭写端
+    }
+}
+
+void TcpConnection::stopRead()
+{
+    TcpConnectionPtr self(shared_from_this());
+    loop_->runInLoop([self]() { self->stopReadInLoop(); });
+}
+
+void TcpConnection::stopReadInLoop()
+{
+    if (reading_)
+    {
+        reading_ = false;
+        channel_->disableReading();
     }
 }
 

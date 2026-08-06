@@ -40,11 +40,11 @@ void HttpServer::onConnection(const TcpConnectionPtr& conn)
 {
     if (conn->connected())
     {
-        // LOG_INFO << "new Connection arrived";
+        conn->setApplicationContext(std::make_shared<HttpContext>());
     }
     else 
     {
-        // LOG_INFO << "Connection closed";
+        conn->setApplicationContext(std::shared_ptr<void>());
     }
 }
 
@@ -54,7 +54,13 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn,
                            Timestamp receiveTime)
 {
     // LOG_INFO << "HttpServer::onMessage";
-    std::unique_ptr<HttpContext> context(new HttpContext);
+    std::shared_ptr<HttpContext> context =
+        std::static_pointer_cast<HttpContext>(conn->getApplicationContext());
+    if (!context)
+    {
+        context = std::make_shared<HttpContext>();
+        conn->setApplicationContext(context);
+    }
 
 #if 0
     // 打印请求报文
@@ -65,35 +71,41 @@ void HttpServer::onMessage(const TcpConnectionPtr& conn,
     // 进行状态机解析
     // 错误则发送 BAD REQUEST 半关闭
 
-    if (!context->parseRequest(buf, receiveTime))
+    while (conn->connected())
     {
-        // LOG_INFO << "parseRequest failed!";
-        conn->send("HTTP/1.1 400 Bad Request\r\n\r\n");
-        conn->shutdown();
-    }
+        const HttpContext::ParseResult result = context->parseRequest(buf, receiveTime);
+        if (result == HttpContext::kIncomplete) return;
+        if (result == HttpContext::kBadRequest)
+        {
+            conn->send("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            conn->shutdown();
+            return;
+        }
+        if (result == HttpContext::kRequestTooLarge)
+        {
+            conn->send("HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            conn->shutdown();
+            return;
+        }
 
-    // 如果成功解析
-    if (context->gotAll())
-    {
-        // LOG_INFO << "parseRequest success!";
-        // 处理请求
-        onRequest(conn, context->request());
+        const bool stopParsing = onRequest(conn, context->request());
         context->reset();
+        if (stopParsing) return;
+        if (buf->readableBytes() == 0) return;
     }
 }
 
-void HttpServer::onRequest(const TcpConnectionPtr& conn, const HttpRequest& req)
+bool HttpServer::onRequest(const TcpConnectionPtr& conn, const HttpRequest& req)
 {
+    if (asyncHttpCallback_ && asyncHttpCallback_(conn, req)) return true;
+
     const std::string& connection = req.getHeader("Connection");
 
     // 判断长连接还是短连接
     bool close = connection == "close" ||
         (req.version() == HttpRequest::kHttp10 && connection != "Keep-Alive");
-    const std::string& url=req.path();
-    // TODO:这里有问题，但是强制改写了
-    // close = true;
     // 响应信息
-    HttpResponse response(false);
+    HttpResponse response(close);
 
     // httpCallback_ 由用户传入，怎么写响应体由用户决定
     // 此处初始化了一些response的信息，比如响应码，回复OK
@@ -106,4 +118,5 @@ void HttpServer::onRequest(const TcpConnectionPtr& conn, const HttpRequest& req)
     {
         conn->shutdown();
     }
+    return response.closeConnection();
 }
