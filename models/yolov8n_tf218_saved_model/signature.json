@@ -1,0 +1,24 @@
+{
+  "signature": "serving_default",
+  "input": {
+    "key": "images",
+    "shape": [
+      1,
+      640,
+      640,
+      3
+    ],
+    "dtype": "float32"
+  },
+  "output": {
+    "key": "output0",
+    "shape": [
+      1,
+      84,
+      8400
+    ],
+    "dtype": "float32"
+  },
+  "layout": "NHWC",
+  "normalization": "RGB float32 / 255.0"
+}

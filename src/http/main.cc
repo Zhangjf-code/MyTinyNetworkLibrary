@@ -3,16 +3,63 @@
 #include "HttpResponse.h"
 #include "HttpContext.h"
 #include "Timestamp.h"
+#include "InferenceController.h"
+#include "InferenceScheduler.h"
+#include "ModelRegistry.h"
+#include "ManagementController.h"
+#include "MockBackend.h"
+#ifdef MYTINYMUDUO_ENABLE_TENSORFLOW
+#include "TensorFlowBackend.h"
+#endif
+#ifdef MYTINYMUDUO_ENABLE_TENSORRT
+#include "TensorRTBackend.h"
+#endif
 #include <fcntl.h>    // open
 #include <sys/mman.h> // mmap, munmap
 #include <sys/stat.h> // fstat
 #include <unistd.h>   // close
-
-#define default_html_path "../../root/index4.html"
-
+#include <signal.h>
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
+#include <thread>
 
 extern char favicon[555];
 bool benchmark = false;
+InferenceController* inferenceController = nullptr;
+ManagementController* managementController = nullptr;
+const char* htmlFilePath = DEFAULT_HTML_PATH;
+
+namespace
+{
+std::string environmentOrDefault(const char* name, const char* fallback)
+{
+    const char* value = std::getenv(name);
+    return value && *value ? value : fallback;
+}
+
+bool positiveEnvironment(const char* name, size_t fallback, size_t maximum,
+                         size_t* result, std::string* error)
+{
+    const char* value = std::getenv(name);
+    if (!value || !*value)
+    {
+        *result = fallback;
+        return true;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno || end == value || *end != '\0' || parsed == 0 || parsed > maximum)
+    {
+        if (error) *error = std::string(name) + " must be an integer between 1 and " +
+                            std::to_string(maximum);
+        return false;
+    }
+    *result = static_cast<size_t>(parsed);
+    return true;
+}
+}
 
 //打开.html文件并将其作为body
 std::string read_file_to_string(const char* filename) {
@@ -59,7 +106,6 @@ std::string read_file_to_string(const char* filename) {
 void onRequest(const HttpRequest& req, HttpResponse* resp)
 {
     std::cout << "Headers " << req.method()<<req.methodString() << " " << req.path() << std::endl;
-    std::string tempfilename;
     // 打印头部
     if (!benchmark)
     {
@@ -68,9 +114,9 @@ void onRequest(const HttpRequest& req, HttpResponse* resp)
         {
             std::cout << header.first << ": " << header.second << std::endl;
         }
-        for(const auto& it : req.bodyfrom()){
-            std::cout << "filename:" << it.first << " path:" <<it.second <<std::endl; 
-            tempfilename = "../../root/assets/predict2/" + it.first;
+        for(const auto& file : req.files()){
+            std::cout << "filename:" << file.fileName
+                      << " bytes:" << file.content.size() << std::endl;
         }
     }
     std::cout<< "Path:" << req.path() << std::endl;
@@ -81,7 +127,7 @@ void onRequest(const HttpRequest& req, HttpResponse* resp)
         resp->setContentType("text/html");
         resp->addHeader("Server", "mytinymuduo");
         std::string now = Timestamp::now().toFormattedString();
-        resp->setBody(read_file_to_string(default_html_path));
+        resp->setBody(read_file_to_string(htmlFilePath));
     }
 
     else if (req.path() == "/favicon.ico")
@@ -91,13 +137,37 @@ void onRequest(const HttpRequest& req, HttpResponse* resp)
         resp->setContentType("image/png");
         resp->setBody(std::string(favicon, sizeof favicon));
     }
+    else if (req.path() == "/v1/infer")
+    {
+        inferenceController->handle(req, resp);
+    }
+    else if (req.path() == "/healthz")
+    {
+        managementController->handleHealth(req, resp);
+    }
+    else if (req.path() == "/v1/models")
+    {
+        managementController->handleModels(req, resp);
+    }
+    else if (req.path() == "/metrics")
+    {
+        managementController->handleMetrics(req, resp);
+    }
     else if (req.path() == "/upload" )
     {
+        if (req.files().empty())
+        {
+            resp->setStatusCode(HttpResponse::k400BadRequest);
+            resp->setStatusMessage("Bad Request");
+            resp->setCloseConnection(true);
+            return;
+        }
         resp->setStatusCode(HttpResponse::k200Ok);
         resp->setStatusMessage("OK");
-        resp->setContentType("image/jpg");
+        const HttpRequest::UploadedFile& file = req.files().front();
+        resp->setContentType(file.contentType.empty() ? "application/octet-stream" : file.contentType);
         resp->addHeader("Server", "mytinymuduo");
-        resp->setBody(read_file_to_string(tempfilename.c_str()));
+        resp->setBody(file.content);
     }
     else
     {
@@ -109,11 +179,100 @@ void onRequest(const HttpRequest& req, HttpResponse* resp)
 
 int main(int argc, char* argv[])
 {
+    sigset_t shutdownSignals;
+    sigemptyset(&shutdownSignals);
+    sigaddset(&shutdownSignals, SIGINT);
+    sigaddset(&shutdownSignals, SIGTERM);
+    if (pthread_sigmask(SIG_BLOCK, &shutdownSignals, nullptr) != 0)
+    {
+        std::cerr << "Failed to block shutdown signals" << std::endl;
+        return 1;
+    }
+
+    std::string configError;
+    size_t port = 0;
+    size_t workerCount = 0;
+    size_t queueCapacity = 0;
+    if (!positiveEnvironment("MYWEBSERVER_PORT", 10000, 65535, &port, &configError) ||
+        !positiveEnvironment("MYWEBSERVER_INFERENCE_WORKERS", 2, 1024,
+                             &workerCount, &configError) ||
+        !positiveEnvironment("MYWEBSERVER_QUEUE_CAPACITY", 128, 1000000,
+                             &queueCapacity, &configError))
+    {
+        std::cerr << "Invalid configuration: " << configError << std::endl;
+        return 1;
+    }
+    const std::string registryPath = environmentOrDefault(
+        "MYWEBSERVER_MODEL_REGISTRY", DEFAULT_MODEL_REGISTRY_PATH);
+    const char* configuredHtmlPath = std::getenv("MYWEBSERVER_HTML_PATH");
+    htmlFilePath = configuredHtmlPath && *configuredHtmlPath
+        ? configuredHtmlPath : DEFAULT_HTML_PATH;
+
     EventLoop loop;
-    HttpServer server(&loop, InetAddress(10000), "http-server");
+    std::shared_ptr<ModelRegistry> registry(new ModelRegistry);
+#if defined(MYTINYMUDUO_ENABLE_TENSORFLOW) || defined(MYTINYMUDUO_ENABLE_TENSORRT)
+    std::string registryError;
+    if (!registry->loadFromFile(registryPath, &registryError))
+    {
+        std::cerr << "Failed to load model registry: " << registryError << std::endl;
+        return 1;
+    }
+#else
+    std::shared_ptr<IInferenceBackend> backend(new MockBackend(std::chrono::milliseconds(20)));
+    ModelConfig modelConfig;
+    modelConfig.name = "mock";
+    modelConfig.version = "mock-1";
+    std::string registryError;
+    if (!registry->add(modelConfig, backend, 0, &registryError))
+    {
+        std::cerr << "Failed to register Mock backend: " << registryError << std::endl;
+        return 1;
+    }
+#endif
+    std::shared_ptr<InferenceMetrics> metrics(new InferenceMetrics);
+    InferenceScheduler scheduler(registry, workerCount, queueCapacity, metrics);
+    std::string schedulerError;
+    if (!scheduler.start(&schedulerError))
+    {
+        std::cerr << "Failed to start inference scheduler: " << schedulerError << std::endl;
+        return 1;
+    }
+    for (const ModelRegistry::Registration& registration : registry->registrations())
+    {
+        std::cout << "Model " << registration.config.name
+                  << " version=" << registration.config.version
+                  << " backend=" << backendTypeName(registration.config.backend)
+                  << " status=" << (registration.available ? "ready" : "unavailable");
+        if (!registration.loadError.empty()) std::cout << " reason=" << registration.loadError;
+        std::cout << std::endl;
+    }
+    InferenceController controller(&scheduler, metrics);
+    ManagementController management(registry, metrics);
+    inferenceController = &controller;
+    managementController = &management;
+    std::cout << "HTTP configuration port=" << port
+              << " workers=" << workerCount
+              << " queue_capacity=" << queueCapacity
+              << " registry=" << registryPath << std::endl;
+    HttpServer server(&loop, InetAddress(static_cast<uint16_t>(port)), "http-server");
     server.setHttpCallback(onRequest);
+    server.setAsyncHttpCallback(
+        [&controller](const TcpConnectionPtr& connection, const HttpRequest& request) {
+            return controller.handleAsync(connection, request);
+        });
+    std::thread signalThread([&loop, &shutdownSignals]() {
+        int signalNumber = 0;
+        if (sigwait(&shutdownSignals, &signalNumber) == 0)
+        {
+            std::cout << "Received signal " << signalNumber
+                      << ", shutting down" << std::endl;
+            loop.quit();
+        }
+    });
     server.start();
     loop.loop();
+    scheduler.stop();
+    signalThread.join();
 }
 
 char favicon[555] = {

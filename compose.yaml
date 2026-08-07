@@ -1,0 +1,18 @@
+services:
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mywebserver-inference:tf2.18-trt10.0
+    init: true
+    restart: unless-stopped
+    gpus: all
+    ports:
+      - "10000:10000"
+    environment:
+      MYWEBSERVER_PORT: "10000"
+      MYWEBSERVER_INFERENCE_WORKERS: "2"
+      MYWEBSERVER_QUEUE_CAPACITY: "128"
+      MYWEBSERVER_MODEL_REGISTRY: /opt/mywebserver/models/registry.json
+      MYWEBSERVER_HTML_PATH: /opt/mywebserver/root/index4.html
+    stop_grace_period: 30s

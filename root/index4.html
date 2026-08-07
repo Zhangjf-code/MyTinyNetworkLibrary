@@ -1,126 +1,374 @@
-<!DOCTYPE html>
-<html lang="zh">
+<!doctype html>
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MyTinyNetworkLibrary</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            background-color: #f4f4f4;
-            flex-direction: column; /* 设置为列方向 */
-        }
-        #container {
-            display: flex;
-            width: 90vw;
-            max-width: 1200px; 
-            height: 80vh; 
-            background: white;
-            border-radius: 5px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            margin-bottom: 20px; /* 为按钮提供空间 */
-        }
-        #fileSection {
-            flex: 1;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-            border-right: 1px solid #eee;
-            margin-bottom: 20px;
-        }
-        #responseSection {
-            flex: 1;
-            padding: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            flex-direction: column;
-        }
-        #imagePreview {
-            max-width: 100%;
-            max-height: 200px;
-            display: none; 
-            margin-top: 20px; 
-            justify-content: center; 
-        }
-        button {
-            padding: 10px 20px;
-            font-size: 16px;
-            cursor: pointer;
-        }
-        #statistics {
-            margin-top: 30px;
-            padding: 10px;
-            border-top: 1px solid #eee;
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyWebServer 推理控制台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0f1d;
+      --panel: rgba(20, 29, 49, .92);
+      --panel-2: #111a2d;
+      --line: #2a3854;
+      --text: #e8edf7;
+      --muted: #91a0b8;
+      --primary: #56d6b0;
+      --primary-dark: #123d37;
+      --danger: #ff7c86;
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(56, 137, 190, .24), transparent 34rem),
+        radial-gradient(circle at 90% 10%, rgba(61, 211, 167, .15), transparent 28rem),
+        var(--bg);
+      font: 15px/1.5 Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+    .shell { width: min(1440px, 94vw); margin: 0 auto; padding: 34px 0 48px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: clamp(26px, 4vw, 42px); letter-spacing: -.04em; }
+    h1 span { color: var(--primary); }
+    header p { margin: 8px 0 0; color: var(--muted); }
+    .status { display: flex; align-items: center; gap: 9px; color: var(--muted); white-space: nowrap; }
+    .status::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 14px var(--primary); }
+
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 24px 70px rgba(0, 0, 0, .25); }
+    .viewer { min-height: 640px; overflow: hidden; display: flex; flex-direction: column; }
+    .viewer-bar { padding: 15px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 16px; color: var(--muted); }
+    .stage { position: relative; flex: 1; min-height: 500px; display: grid; place-items: center; padding: 20px; overflow: auto; }
+    .empty { text-align: center; color: var(--muted); }
+    .empty strong { display: block; color: var(--text); font-size: 18px; margin-bottom: 5px; }
+    canvas { display: none; max-width: 100%; max-height: 72vh; width: auto; height: auto; border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
+
+    .sidebar { padding: 20px; align-self: start; }
+    .sidebar h2, .results h2 { margin: 0 0 18px; font-size: 17px; }
+    .field { margin-bottom: 17px; }
+    label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 13px; }
+    input[type="text"], select {
+      width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px;
+      color: var(--text); background: var(--panel-2); outline: none;
+    }
+    input:focus, select:focus { border-color: var(--primary); }
+    .range-line { display: flex; align-items: center; gap: 12px; }
+    input[type="range"] { flex: 1; accent-color: var(--primary); }
+    output { min-width: 42px; text-align: right; color: var(--primary); font-variant-numeric: tabular-nums; }
+    .file-picker { position: relative; display: block; padding: 18px; border: 1px dashed #47617f; border-radius: 11px; text-align: center; cursor: pointer; background: rgba(28, 44, 70, .5); transition: border-color .15s, background .15s; }
+    .file-picker:hover { border-color: var(--primary); }
+    .file-picker.dragging { border-color: var(--primary); background: rgba(86, 214, 176, .13); }
+    .file-picker:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    #imageInput { display: block; width: 100%; margin-top: 10px; color: var(--muted); }
+    #imageInput::file-selector-button { margin-right: 10px; border: 1px solid var(--primary); border-radius: 8px; padding: 9px 12px; color: var(--text); background: var(--primary-dark); cursor: pointer; }
+    #imageInput::file-selector-button:hover { filter: brightness(1.2); }
+    #fileName { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #submit { width: 100%; border: 0; border-radius: 10px; padding: 12px 16px; color: #071613; background: var(--primary); font-weight: 700; cursor: pointer; }
+    #submit:hover { filter: brightness(1.08); }
+    #submit:disabled { cursor: wait; opacity: .55; }
+    .message { min-height: 22px; margin: 13px 0 0; color: var(--muted); font-size: 13px; }
+    .message.error { color: var(--danger); }
+
+    .results { grid-column: 1 / -1; padding: 20px; }
+    .metrics { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 10px; }
+    .metric { padding: 14px; border-radius: 11px; background: var(--panel-2); border: 1px solid #22304a; }
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; font-size: 18px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+    .table-wrap { margin-top: 18px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 680px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+    th { color: var(--muted); font-size: 12px; font-weight: 500; }
+    td { font-variant-numeric: tabular-nums; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; color: var(--primary); background: var(--primary-dark); }
+
+    @media (max-width: 900px) {
+      header { align-items: start; flex-direction: column; }
+      .workspace { grid-template-columns: 1fr; }
+      .viewer { min-height: 420px; }
+      .stage { min-height: 360px; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
 </head>
 <body>
-    <div id="container">
-        <div id="fileSection">
-            <input type="file" id="fileInput" accept="image/*">
-            <img id="imagePreview" alt="Image Preview">
+  <main class="shell">
+    <header>
+      <div>
+        <h1>MyWebServer <span>Inference</span></h1>
+        <p>TensorFlow CPU / TensorRT GPU · YOLOv8 图片目标检测</p>
+      </div>
+      <div class="status" id="serviceStatus">正在读取服务状态</div>
+    </header>
+
+    <section class="workspace">
+      <div class="panel viewer">
+        <div class="viewer-bar"><span>检测画布</span><span id="imageSize">尚未选择图片</span></div>
+        <div class="stage">
+          <div class="empty" id="emptyState"><strong>选择一张 JPEG 或 PNG</strong>推理结果将在原图上绘制</div>
+          <canvas id="canvas"></canvas>
         </div>
-        <div id="responseSection">
-            <div id="responseText"></div>
-            <img id="responseImage" alt="Response Image" style="max-width: 100%; max-height: 200px; display: none;">
+      </div>
+
+      <aside class="panel sidebar">
+        <h2>推理参数</h2>
+        <div class="field">
+          <label for="model">模型</label>
+          <select id="model"><option value="default">default</option></select>
         </div>
-    </div>
-    <button id="submitButton">提交</button>
+        <div class="field">
+          <label for="backend">推理后端</label>
+          <select id="backend">
+            <option value="auto">Auto（优先 TensorRT）</option>
+            <option value="tensorrt">TensorRT GPU</option>
+            <option value="tensorflow">TensorFlow CPU</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="threshold">置信度阈值</label>
+          <div class="range-line">
+            <input id="threshold" type="range" min="0" max="1" step="0.05" value="0.25">
+            <output id="thresholdValue">0.25</output>
+          </div>
+        </div>
+        <div class="field">
+          <div class="file-picker" id="dropZone" role="button" tabindex="0">
+            将检测图片拖拽到这里
+            <span id="fileName">JPEG / PNG，最大 10 MiB</span>
+          </div>
+          <input id="imageInput" type="file" accept="image/jpeg,image/png">
+        </div>
+        <button id="submit" type="button">开始推理</button>
+        <p class="message" id="message" role="status"></p>
+      </aside>
 
-    <script>
-        const fileInput = document.getElementById('fileInput');
-        const imagePreview = document.getElementById('imagePreview');
-        const submitButton = document.getElementById('submitButton');
-        const responseText = document.getElementById('responseText');
-        const responseImage = document.getElementById('responseImage');
+      <section class="panel results">
+        <h2>推理结果</h2>
+        <div class="metrics">
+          <div class="metric"><span>实际后端</span><strong id="resultBackend">—</strong></div>
+          <div class="metric"><span>模型版本</span><strong id="resultVersion">—</strong></div>
+          <div class="metric"><span>检测数量</span><strong id="resultCount">0</strong></div>
+          <div class="metric"><span>预处理</span><strong id="preprocessMs">—</strong></div>
+          <div class="metric"><span>推理</span><strong id="inferenceMs">—</strong></div>
+          <div class="metric"><span>总耗时</span><strong id="totalMs">—</strong></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>类别</th><th>置信度</th><th>边界框 [x1, y1, x2, y2]</th></tr></thead>
+            <tbody id="detections"><tr><td colspan="4">暂无检测结果</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
 
-        // 显示预览
-        fileInput.addEventListener('change', function() {
-            const file = this.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    imagePreview.src = event.target.result;
-                    imagePreview.style.display = 'block'; // 显示图片
-                }
-                reader.readAsDataURL(file);
-            }
+  <script>
+    "use strict";
+    const elements = {
+      model: document.querySelector("#model"), backend: document.querySelector("#backend"),
+      threshold: document.querySelector("#threshold"), thresholdValue: document.querySelector("#thresholdValue"),
+      imageInput: document.querySelector("#imageInput"), dropZone: document.querySelector("#dropZone"),
+      fileName: document.querySelector("#fileName"),
+      submit: document.querySelector("#submit"), message: document.querySelector("#message"),
+      canvas: document.querySelector("#canvas"), empty: document.querySelector("#emptyState"),
+      imageSize: document.querySelector("#imageSize"), detections: document.querySelector("#detections"),
+      resultBackend: document.querySelector("#resultBackend"), resultVersion: document.querySelector("#resultVersion"),
+      resultCount: document.querySelector("#resultCount"), preprocessMs: document.querySelector("#preprocessMs"),
+      inferenceMs: document.querySelector("#inferenceMs"), totalMs: document.querySelector("#totalMs")
+    };
+    elements.serviceStatus = document.querySelector("#serviceStatus");
+    const context = elements.canvas.getContext("2d");
+    let sourceImage = null;
+    let previewUrl = null;
+    let selectedFile = null;
+
+    function setMessage(text, error = false) {
+      elements.message.textContent = text;
+      elements.message.classList.toggle("error", error);
+    }
+
+    function drawImage(detections = []) {
+      if (!sourceImage) return;
+      elements.canvas.width = sourceImage.naturalWidth;
+      elements.canvas.height = sourceImage.naturalHeight;
+      context.drawImage(sourceImage, 0, 0);
+      const lineWidth = Math.max(2, sourceImage.naturalWidth / 350);
+      const fontSize = Math.max(14, sourceImage.naturalWidth / 45);
+      context.lineWidth = lineWidth;
+      context.font = `600 ${fontSize}px sans-serif`;
+      context.textBaseline = "top";
+      detections.forEach((detection) => {
+        const [x1, y1, x2, y2] = detection.bbox;
+        const label = `${detection.label} ${(detection.score * 100).toFixed(1)}%`;
+        context.strokeStyle = "#56d6b0";
+        context.fillStyle = "rgba(86, 214, 176, .18)";
+        context.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        context.fillRect(x1, y1, x2 - x1, y2 - y1);
+        const textWidth = context.measureText(label).width;
+        const labelY = Math.max(0, y1 - fontSize - 8);
+        context.fillStyle = "#56d6b0";
+        context.fillRect(x1, labelY, textWidth + 12, fontSize + 8);
+        context.fillStyle = "#071613";
+        context.fillText(label, x1 + 6, labelY + 4);
+      });
+    }
+
+    function resetResults() {
+      elements.resultBackend.textContent = "—";
+      elements.resultVersion.textContent = "—";
+      elements.resultCount.textContent = "0";
+      elements.preprocessMs.textContent = "—";
+      elements.inferenceMs.textContent = "—";
+      elements.totalMs.textContent = "—";
+      elements.detections.innerHTML = '<tr><td colspan="4">暂无检测结果</td></tr>';
+    }
+
+    elements.threshold.addEventListener("input", () => {
+      elements.thresholdValue.value = Number(elements.threshold.value).toFixed(2);
+    });
+
+    function selectImage(file) {
+      if (!file) return;
+      if (!(["image/jpeg", "image/png"].includes(file.type))) {
+        setMessage("请选择 JPEG 或 PNG 图片", true);
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setMessage("图片不能超过 10 MiB", true);
+        return;
+      }
+      selectedFile = file;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        sourceImage = image;
+        elements.empty.style.display = "none";
+        elements.canvas.style.display = "block";
+        elements.imageSize.textContent = `${image.naturalWidth} × ${image.naturalHeight}`;
+        elements.fileName.textContent = `${file.name} · ${(file.size / 1024).toFixed(1)} KiB`;
+        drawImage();
+        resetResults();
+        setMessage("图片已就绪");
+      };
+      image.onerror = () => setMessage("浏览器无法读取该图片", true);
+      image.src = previewUrl;
+    }
+
+    elements.imageInput.addEventListener("change", () => {
+      selectImage(elements.imageInput.files[0]);
+    });
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+      elements.dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        elements.dropZone.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach((eventName) => {
+      elements.dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        elements.dropZone.classList.remove("dragging");
+      });
+    });
+    elements.dropZone.addEventListener("drop", (event) => {
+      selectImage(event.dataTransfer.files[0]);
+    });
+
+    elements.submit.addEventListener("click", async () => {
+      const file = selectedFile;
+      if (!file) { setMessage("请先选择一张图片", true); return; }
+      const form = new FormData();
+      form.append("model", elements.model.value.trim() || "default");
+      form.append("backend", elements.backend.value);
+      form.append("threshold", elements.threshold.value);
+      form.append("image", file);
+      elements.submit.disabled = true;
+      elements.submit.textContent = "推理中…";
+      setMessage("正在上传并执行推理");
+      try {
+        const response = await fetch("/v1/infer", { method: "POST", body: form });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          const detail = data.error && data.error.message ? data.error.message : `HTTP ${response.status}`;
+          throw new Error(detail);
+        }
+        drawImage(data.detections);
+        elements.resultBackend.textContent = data.backend;
+        elements.resultVersion.textContent = data.model_version;
+        elements.resultCount.textContent = String(data.detections.length);
+        elements.preprocessMs.textContent = `${data.latency_ms.preprocess.toFixed(2)} ms`;
+        elements.inferenceMs.textContent = `${data.latency_ms.inference.toFixed(2)} ms`;
+        elements.totalMs.textContent = `${data.latency_ms.total.toFixed(2)} ms`;
+        elements.detections.replaceChildren();
+        if (data.detections.length === 0) {
+          elements.detections.innerHTML = '<tr><td colspan="4">当前阈值下没有检测结果</td></tr>';
+        } else {
+          data.detections.forEach((detection, index) => {
+            const row = document.createElement("tr");
+            const values = [String(index + 1), detection.label,
+              `${(detection.score * 100).toFixed(2)}%`,
+              detection.bbox.map((value) => value.toFixed(1)).join(", ")];
+            values.forEach((value, column) => {
+              const cell = document.createElement("td");
+              if (column === 1) { const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = value; cell.appendChild(badge); }
+              else cell.textContent = value;
+              row.appendChild(cell);
+            });
+            elements.detections.appendChild(row);
+          });
+        }
+        setMessage(`请求 ${data.request_id} 已完成`);
+      } catch (error) {
+        drawImage();
+        resetResults();
+        setMessage(`推理失败：${error.message}`, true);
+      } finally {
+        elements.submit.disabled = false;
+        elements.submit.textContent = "开始推理";
+      }
+    });
+
+    async function initializeServiceMetadata() {
+      try {
+        const [healthResponse, modelsResponse] = await Promise.all([
+          fetch("/healthz"), fetch("/v1/models")
+        ]);
+        const health = await healthResponse.json();
+        const catalog = await modelsResponse.json();
+        if (!healthResponse.ok || !modelsResponse.ok) throw new Error("管理接口不可用");
+        elements.serviceStatus.textContent = health.status === "degraded"
+          ? `服务降级 · ${health.backends.healthy}/${health.backends.configured} 后端健康`
+          : `服务健康 · ${health.backends.healthy} 后端可用`;
+        const names = new Set(catalog.models.filter((item) => item.available && item.healthy)
+          .map((item) => item.name));
+        elements.model.replaceChildren();
+        names.forEach((name) => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name === catalog.default_model ? `${name}（默认）` : name;
+          option.selected = name === catalog.default_model;
+          elements.model.appendChild(option);
         });
+        if (elements.model.options.length === 0) {
+          const option = document.createElement("option");
+          option.value = "default";
+          option.textContent = "default（无可用模型）";
+          elements.model.appendChild(option);
+          elements.submit.disabled = true;
+        }
+      } catch (error) {
+        elements.serviceStatus.textContent = "无法读取服务状态";
+        setMessage(`模型列表加载失败：${error.message}`, true);
+      }
+    }
 
-        // 提交图片
-        submitButton.addEventListener('click', function() {
-            const formData = new FormData();
-            const file = fileInput.files[0];
-            if (file) {
-                formData.append('image', file);
-                
-                fetch('/upload', { // 替换为您的后端处理URL
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.blob()) // 获取响应为Blob
-                .then(blob => {
-                    // 创建一个URL并显示图片
-                    const imageUrl = URL.createObjectURL(blob);
-                    responseImage.src = imageUrl; // 更新为Blob URL
-                    responseImage.style.display = 'block'; // 显示图片
-                    responseText.innerHTML = '<span style="color: green;">图片处理成功！</span>';
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    responseText.innerHTML = '<span style="color: red;">上传失败，请重试。</span>';
-                });
-            } else {
-                alert('请先选择一张图片！');
-            }
-        });
-    </script>
+    initializeServiceMetadata();
+  </script>
 </body>
 </html>

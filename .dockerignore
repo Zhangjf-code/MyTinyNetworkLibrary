@@ -1,0 +1,12 @@
+.git
+.agents
+.codex
+.deps
+build
+cmake-build-*
+lib
+src/http/HttpServer
+example/client/client
+example/server/testserver
+example/server-timequeue/echoserver
+*.log

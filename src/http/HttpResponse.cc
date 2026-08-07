@@ -20,10 +20,10 @@ void HttpResponse::appendToBuffer(Buffer* output) const
     }
     else
     {
-        snprintf(buf, sizeof(buf), "Content-Length: %zd\r\n", body_.size());
-        output->append(buf);
         output->append("Connection: Keep-Alive\r\n");
     }
+    snprintf(buf, sizeof(buf), "Content-Length: %zd\r\n", body_.size());
+    output->append(buf);
 
     for (const auto& header : headers_)
     {

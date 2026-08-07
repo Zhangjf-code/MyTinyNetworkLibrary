@@ -41,6 +41,7 @@ public:
     void send(const std::string &buf);
     // 关闭连接
     void shutdown();
+    void stopRead();
 
     void setConnectionCallback(const ConnectionCallback& cb)
     { connectionCallback_ = cb; }
@@ -65,6 +66,12 @@ public:
         return context_;
     } 
 
+    void setApplicationContext(const std::shared_ptr<void>& context)
+    { applicationContext_ = context; }
+
+    const std::shared_ptr<void>& getApplicationContext() const
+    { return applicationContext_; }
+
     // 连接建立
     void connectEstablished();
     // 连接销毁
@@ -78,8 +85,9 @@ private:
     void handleClose();
     void handleError();
 
-    void sendInLoop(const void* message, size_t len);
+    void sendInLoop(const std::string& message);
     void shutdownInLoop();
+    void stopReadInLoop();
 
     EventLoop *loop_; // 这里绝对不是baseLoop， 因为TcpConnection都是在subLoop里面管理的
     const std::string name_;
@@ -104,7 +112,6 @@ private:
     Buffer outputBuffer_; // 发送数据的缓冲区
 
     WeakEntryPtr context_;//保存 Entry 的弱引用 用于时间轮心跳检测
+    std::shared_ptr<void> applicationContext_; // 上层协议的连接级上下文
 };
-
-
 

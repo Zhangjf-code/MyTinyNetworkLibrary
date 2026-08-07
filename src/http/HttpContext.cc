@@ -1,213 +1,194 @@
 #include "HttpContext.h"
-#include <fstream>
-#include "Logger.h"
 
-#include "FormDataParser.h"
+#include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
 
-#define save_pic_path "../../root/picture/"
+namespace
+{
+std::string trim(const std::string& value)
+{
+    const std::string whitespace(" \t\r\n");
+    const size_t first = value.find_first_not_of(whitespace);
+    if (first == std::string::npos) return std::string();
+    const size_t last = value.find_last_not_of(whitespace);
+    return value.substr(first, last - first + 1);
+}
 
-// 假设这个方法在 parseRequest 中被调用，且已经解析出了图片数据
+std::string parameterValue(const std::string& value, const std::string& name)
+{
+    const std::string key = name + "=";
+    size_t pos = value.find(key);
+    if (pos == std::string::npos) return std::string();
+    pos += key.size();
+    if (pos < value.size() && value[pos] == '"')
+    {
+        const size_t end = value.find('"', pos + 1);
+        return end == std::string::npos ? std::string() : value.substr(pos + 1, end - pos - 1);
+    }
+    const size_t end = value.find(';', pos);
+    return trim(value.substr(pos, end == std::string::npos ? end : end - pos));
+}
+}
 
-
-
-// 解析请求行
 bool HttpContext::processRequestLine(const char *begin, const char *end)
 {
-    bool succeed = false;
     const char *start = begin;
     const char *space = std::find(start, end, ' ');
+    if (space == end || !request_.setMethod(start, space)) return false;
 
-    // 不是最后一个空格，并且成功获取了method并设置到request_
-    if (space != end && request_.setMethod(start, space))
-    {
-        // 跳过空格
-        start = space+1;
-        // 继续寻找下一个空格
-        space = std::find(start, end, ' ');
-        if (space != end)
-        {
-            // 查看是否有请求参数
-            const char* question = std::find(start, space, '?');
-            if (question != space)
-            {
-                // 设置访问路径
-                request_.setPath(start, question);
-                // 设置访问变量
-                request_.setQuery(question, space);
-            }
-            else
-            {
-                request_.setPath(start, space);
-            }
-            start = space+1;
-            // 获取最后的http版本
-            succeed = (end-start == 8 && std::equal(start, end-1, "HTTP/1."));
-            if (succeed)
-            {
-                if (*(end-1) == '1')
-                {
-                    request_.setVersion(HttpRequest::kHttp11);
-                }
-                else if (*(end-1) == '0')
-                {
-                    request_.setVersion(HttpRequest::kHttp10);
-                }
-                else
-                {
-                    succeed = false;
-                }
-            }
-        }
-    }  
-    return succeed;
+    start = space + 1;
+    space = std::find(start, end, ' ');
+    if (space == end) return false;
+
+    const char* question = std::find(start, space, '?');
+    request_.setPath(start, question);
+    if (question != space) request_.setQuery(question + 1, space);
+
+    start = space + 1;
+    if (end - start != 8 || !std::equal(start, end - 1, "HTTP/1.")) return false;
+    if (*(end - 1) == '1') request_.setVersion(HttpRequest::kHttp11);
+    else if (*(end - 1) == '0') request_.setVersion(HttpRequest::kHttp10);
+    else return false;
+    return true;
 }
 
-// return false if any error
-bool HttpContext::parseRequest(Buffer* buf, Timestamp receiveTime)
+bool HttpContext::prepareBody()
 {
-    bool ok = false;
-    bool hasMore = true;
-    while (hasMore)
+    const std::string value = request_.getHeader("Content-Length");
+    if (value.empty())
     {
-        // 请求行状态
-        if (state_ == kExpectRequestLine)
+        contentLength_ = 0;
+        return true;
+    }
+
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value.c_str(), &end, 10);
+    if (errno != 0 || end == value.c_str() || *end != '\0' ||
+        parsed > std::numeric_limits<size_t>::max()) return false;
+    contentLength_ = static_cast<size_t>(parsed);
+    return true;
+}
+
+bool HttpContext::parseMultipartBody()
+{
+    const std::string contentType = request_.getHeader("Content-Type");
+    if (contentType.find("multipart/form-data") == std::string::npos) return true;
+
+    const std::string boundaryValue = parameterValue(contentType, "boundary");
+    if (boundaryValue.empty()) return false;
+    const std::string boundary = "--" + boundaryValue;
+    const std::string& body = request_.getbody();
+    size_t cursor = 0;
+
+    while (true)
+    {
+        const size_t marker = body.find(boundary, cursor);
+        if (marker == std::string::npos) return false;
+        size_t partStart = marker + boundary.size();
+        if (body.compare(partStart, 2, "--") == 0) return true;
+        if (body.compare(partStart, 2, "\r\n") != 0) return false;
+        partStart += 2;
+
+        const size_t headerEnd = body.find("\r\n\r\n", partStart);
+        if (headerEnd == std::string::npos) return false;
+        const size_t nextMarker = body.find("\r\n" + boundary, headerEnd + 4);
+        if (nextMarker == std::string::npos) return false;
+
+        std::string disposition;
+        std::string partContentType;
+        size_t lineStart = partStart;
+        while (lineStart < headerEnd)
         {
-            // 找到 \r\n 位置
+            size_t lineEnd = body.find("\r\n", lineStart);
+            if (lineEnd == std::string::npos || lineEnd > headerEnd) lineEnd = headerEnd;
+            const std::string line = body.substr(lineStart, lineEnd - lineStart);
+            const size_t colon = line.find(':');
+            if (colon == std::string::npos) return false;
+            std::string key = line.substr(0, colon);
+            std::transform(key.begin(), key.end(), key.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            const std::string value = trim(line.substr(colon + 1));
+            if (key == "content-disposition") disposition = value;
+            else if (key == "content-type") partContentType = value;
+            lineStart = lineEnd + 2;
+        }
+
+        if (disposition.find("form-data") == std::string::npos) return false;
+        const std::string fieldName = parameterValue(disposition, "name");
+        const std::string fileName = parameterValue(disposition, "filename");
+        if (fieldName.empty()) return false;
+        const std::string content = body.substr(headerEnd + 4, nextMarker - (headerEnd + 4));
+        if (fileName.empty())
+        {
+            request_.addBodyForm(fieldName, content);
+        }
+        else
+        {
+            HttpRequest::UploadedFile file;
+            file.fieldName = fieldName;
+            file.fileName = fileName;
+            file.contentType = partContentType;
+            file.content = content;
+            request_.addFile(std::move(file));
+        }
+        cursor = nextMarker + 2;
+    }
+}
+
+HttpContext::ParseResult HttpContext::parseRequest(Buffer* buf, Timestamp receiveTime)
+{
+    while (true)
+    {
+        if (state_ == kExpectRequestLine || state_ == kExpectHeaders)
+        {
             const char* crlf = buf->findCRLF();
-            if (crlf)
+            if (!crlf)
             {
-                // 从可读区读取请求行
-                // [peek(), crlf + 2) 是一行
-                ok = processRequestLine(buf->peek(), crlf);
-                if (ok)
-                {
-                    request_.setReceiveTime(receiveTime);
-                    // readerIndex 向后移动位置直到 crlf + 2
-                    buf->retrieveUntil(crlf + 2);
-                    // 状态转移，接下来解析请求头
-                    state_ = kExpectHeaders;
-                }
-                else
-                {
-                    hasMore = false;
-                }
+                return headerBytes_ + buf->readableBytes() > kMaxHeaderBytes
+                    ? kRequestTooLarge : kIncomplete;
+            }
+
+            const size_t lineBytes = static_cast<size_t>(crlf + 2 - buf->peek());
+            headerBytes_ += lineBytes;
+            if (headerBytes_ > kMaxHeaderBytes) return kRequestTooLarge;
+
+            if (state_ == kExpectRequestLine)
+            {
+                if (!processRequestLine(buf->peek(), crlf)) return kBadRequest;
+                request_.setReceiveTime(receiveTime);
+                state_ = kExpectHeaders;
             }
             else
             {
-                hasMore = false;
-            }
-        }
-        // 解析请求头
-        else if (state_ == kExpectHeaders)
-        {
-            const char* crlf = buf->findCRLF();
-            if (crlf)
-            {
-                // 找到 : 位置
                 const char* colon = std::find(buf->peek(), crlf, ':');
-                if (colon != crlf)
+                if (colon == crlf)
                 {
-                    // 添加状态首部
+                    if (crlf != buf->peek()) return kBadRequest;
+                    if (!prepareBody()) return kBadRequest;
+                    if (contentLength_ > kMaxBodyBytes) return kRequestTooLarge;
+                    state_ = kExpectBody;
+                }
+                else
+                {
                     request_.addHeader(buf->peek(), colon, crlf);
                 }
-                else // colon == crlf 说明没有找到 : 了，直接返回 end
-                {
-                    // empty line, end of header
-                    // FIXME:
-                    state_ = kExpectBody;
-                    // hasMore = false;
-                }
-                buf->retrieveUntil(crlf + 2);
             }
-            else
-            {
-                hasMore = false;
-            }
+            buf->retrieveUntil(crlf + 2);
         }
-        // 在请求体解析部分调用此方法
         else if (state_ == kExpectBody)
         {
-            // 解析请求体
-            //解析请求方法
-            std::cout << "A"<<request_.method() << std::endl;
-            if(request_.method() == HttpRequest::Method::kPost){
-                int contentLength = stoi(request_.getHeader("Content-Length"));
-                std::string contenttype = request_.getHeader("Content-Type");
-                std::cout<< "B"<< "   "<<contentLength<< "    " << buf->readableBytes()<< std::endl;
-            
-                if (contentLength > 0 ){
-                    if(contenttype.find("multipart/form-data") != -1)
-                    {
-                        //解析普通表单数据
-                        std::string pattern = "boundary=";
-                        int i = contenttype.find("; " + pattern, 0);
-                        i += pattern.size() + 2;
-                        std::string boundary = contenttype.substr(i);
-                        std::shared_ptr<std::string> sptr_data(new std::string(buf->retrieveAllAsString()));
-                        contentLength -= sptr_data->size();
-                        while(contentLength > 0){
-                            int *saveerrno;
-                            buf->readFd(buf->fd(), saveerrno);
-                            std::string line = buf->retrieveAsString(buf->readableBytes());
-                            sptr_data->append(line);
-                            contentLength -= line.size();
-                        }
-                        FormDataParser fdp(sptr_data, 0, "--" + boundary);
-                        auto p = fdp.parse();
-
-                        for (std::vector<FormItem>::iterator it = p->begin(); it != p->end(); ++it) {
-                            std::string filename = (*(it)).getFileName();
-                            if (filename != "") {  // 如果文件名不为空，那么说明是个文件，那么就存储为test.zip
-                                std::string content = (*(it)).getContent();
-                                saveImageToFile(content, save_pic_path+filename);
-                                if(request_.getBodyForm(filename) == "")
-                                    request_.addBodyForm(filename,save_pic_path+filename);
-                                else
-                                    LOG_INFO("文件已存在");
-                            } else {
-                                if(request_.getBodyForm((*(it)).getName()) == "")
-                                    request_.addBodyForm((*(it)).getName(),(*(it)).getContent());
-                                else
-                                    LOG_INFO("文件已存在");
-                            }
-
-                            // std::cout << (*(it)).getName() <<std::endl; //<< (*(it)).getContent() <<std::endl;
-                        }
-                        state_ = kGotAll;
-                        hasMore = false; // 请求处理完毕
-                    }else{
-                        std::cout<< "ContentType:"<< contenttype << std::endl;
-                        request_.setBody(std::move(buf->retrieveAsString(contentLength)));
-                        state_ = kGotAll;
-                        hasMore = false; // 请求处理完毕
-                    }
-                }else{
-                    LOG_ERROR("解析请求体失败");
-                    hasMore = false;
-                }
-            }else{
-                state_ = kGotAll;
-                hasMore = false;
-            }
+            if (buf->readableBytes() < contentLength_) return kIncomplete;
+            request_.setBody(buf->retrieveAsString(contentLength_));
+            if (!parseMultipartBody()) return kBadRequest;
+            state_ = kGotAll;
+            return kComplete;
+        }
+        else
+        {
+            return kComplete;
         }
     }
-    return ok;
 }
-
-
-
-void HttpContext::saveImageToFile(const std::string& data, const std::string& filename)
-{
-    std::ofstream outFile(filename, std::ios::binary);
-    if (outFile)
-    {
-        outFile.write(data.data(), data.size());
-        outFile.close();
-    }
-    else
-    {
-        // 处理文件打开失败的情况
-        std::cerr << "Failed to open file for writing: " << filename << std::endl;
-    }
-}
-

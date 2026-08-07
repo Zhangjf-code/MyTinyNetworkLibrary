@@ -6,6 +6,17 @@
 class HttpContext
 {
 public:
+    enum ParseResult
+    {
+        kIncomplete,
+        kComplete,
+        kBadRequest,
+        kRequestTooLarge,
+    };
+
+    static const size_t kMaxHeaderBytes = 16 * 1024;
+    static const size_t kMaxBodyBytes = 10 * 1024 * 1024;
+
     // HTTP请求状态
     enum HttpRequestParseState
     {
@@ -20,7 +31,7 @@ public:
     {
     }
 
-    bool parseRequest(Buffer* buf, Timestamp receiveTime);
+    ParseResult parseRequest(Buffer* buf, Timestamp receiveTime);
 
     bool gotAll() const { return state_ == kGotAll; }
 
@@ -28,6 +39,8 @@ public:
     void reset()
     {
         state_ = kExpectRequestLine;
+        headerBytes_ = 0;
+        contentLength_ = 0;
         /**
          * 构造一个临时空HttpRequest对象，和当前的成员HttpRequest对象交换置空
          * 然后临时对象析构
@@ -40,12 +53,13 @@ public:
 
     HttpRequest& request() { return request_; }
 
-
-    void saveImageToFile(const std::string& data, const std::string& filename);
-
 private:
     bool processRequestLine(const char *begin, const char *end);
+    bool prepareBody();
+    bool parseMultipartBody();
 
     HttpRequestParseState state_;
     HttpRequest request_;
+    size_t headerBytes_ = 0;
+    size_t contentLength_ = 0;
 };
